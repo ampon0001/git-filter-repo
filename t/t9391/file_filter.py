@@ -15,10 +15,10 @@ def drop_file_by_contents(blob, metadata):
     blob.skip()
 
 def drop_files_by_name(commit, metadata):
-  new_file_changes = []
-  for change in commit.file_changes:
-    if not change.filename.endswith(b'.doc'):
-      new_file_changes.append(change)
+  new_file_changes = [
+      change for change in commit.file_changes
+      if not change.filename.endswith(b'.doc')
+  ]
   commit.file_changes = new_file_changes
 
 sys.argv.append('--force')
