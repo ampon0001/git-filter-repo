@@ -271,15 +271,15 @@ class UserInterfaceNightmare:
   def _get_and_check_orig_refs(self):
     self._orig_refs = self._get_dereferenced_refs()
     if any(ref.startswith(self.args.original) for ref in self._orig_refs):
-      if self.args.force:
-        cmds = b''.join([b"delete %s\n" % r
-                         for r in sorted(self._orig_refs)
-                         if r.startswith(self.args.original)])
-        subproc.check_output('git update-ref --no-deref --stdin'.split(),
-                             input = cmds)
-      else:
+      if not self.args.force:
         raise SystemExit("Error: {} already exists.  Force overwriting with -f"
                          .format(fr.decode(self.args.original)))
+
+      cmds = b''.join([b"delete %s\n" % r
+                       for r in sorted(self._orig_refs)
+                       if r.startswith(self.args.original)])
+      subproc.check_output('git update-ref --no-deref --stdin'.split(),
+                           input = cmds)
 
   def _write_original_refs(self):
     new_refs = self._get_dereferenced_refs()
@@ -502,7 +502,7 @@ class UserInterfaceNightmare:
       if full_tree:
         commit.file_changes.insert(0, fr.FileChange(b'DELETEALL'))
       elif deletion_changes and self.args.tree_filter:
-        orig_deletions = set(x.filename for x in deletion_changes)
+        orig_deletions = {x.filename for x in deletion_changes}
         # Populate tmp_tree with all the deleted files, each containing its
         # original name
         shutil.rmtree(self.tmp_tree)
@@ -603,7 +603,7 @@ class UserInterfaceNightmare:
 
 overrides = ('GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS',
              'I_PROMISE_TO_UPGRADE_TO_FILTER_REPO')
-if not any(x in os.environ for x in overrides) and sys.argv[1:] != ['--help']:
+if all(x not in os.environ for x in overrides) and sys.argv[1:] != ['--help']:
   print("""
 WARNING: While filter-lamely is a better filter-branch than filter-branch,
          it is vastly inferior to filter-repo.  Please use filter-repo

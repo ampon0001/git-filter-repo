@@ -398,11 +398,9 @@ class _IDs(object):
 
       # Transitivity will be needed if new commits are being inserted mid-way
       # through a branch.
-      if handle_transitivity:
-        # Anything that points to old_id should point to new_id
-        if old_id in self._reverse_translation:
-          for id_ in self._reverse_translation[old_id]:
-            self._translation[id_] = new_id
+      if handle_transitivity and old_id in self._reverse_translation:
+        for id_ in self._reverse_translation[old_id]:
+          self._translation[id_] = new_id
 
       # Record that new_id is pointed to by old_id
       if new_id not in self._reverse_translation:
@@ -1235,7 +1233,7 @@ class FastExportParser(object):
     file_change = self._parse_optional_filechange()
     had_file_changes = file_change is not None
     while file_change:
-      if not (type(file_change) == bytes and file_change == b'skipped'):
+      if type(file_change) != bytes or file_change != b'skipped':
         file_changes.append(file_change)
       file_change = self._parse_optional_filechange()
     if self._currentline == b'\n':
@@ -1261,7 +1259,7 @@ class FastExportParser(object):
 
     # Now print the resulting commit, or if prunable skip it
     self._latest_orig_commit[branch] = commit.id
-    if not (commit.old_id or commit.id) in _SKIPPED_COMMITS:
+    if ((commit.old_id or commit.id)) not in _SKIPPED_COMMITS:
       self._latest_commit[branch] = commit.id
     if not commit.dumped:
       self._imported_refs.add(commit.branch)
@@ -1454,9 +1452,8 @@ class SubprocessWrapper(object):
   def decodify(args):
     if type(args) == str:
       return args
-    else:
-      assert type(args) == list
-      return [decode(x) if type(x)==bytes else x for x in args]
+    assert type(args) == list
+    return [decode(x) if type(x)==bytes else x for x in args]
 
   @staticmethod
   def call(*args, **kwargs):
@@ -1545,7 +1542,6 @@ class GitUtils(object):
   @staticmethod
   def get_blob_sizes(quiet = False):
     blob_size_progress = ProgressWriter()
-    num_blobs = 0
     processed_blobs_msg = _("Processed %d blob sizes")
 
     # Get sizes of blobs by sha1
@@ -1556,13 +1552,12 @@ class GitUtils(object):
                        stdout = subprocess.PIPE)
     unpacked_size = {}
     packed_size = {}
-    for line in cf.stdout:
+    for num_blobs, line in enumerate(cf.stdout, start=1):
       sha, objtype, objsize, objdisksize = line.split()
       objsize, objdisksize = int(objsize), int(objdisksize)
       if objtype == b'blob':
         unpacked_size[sha] = objsize
         packed_size[sha] = objdisksize
-      num_blobs += 1
       if not quiet:
         blob_size_progress.show(processed_blobs_msg % num_blobs)
     cf.wait()
@@ -1645,10 +1640,10 @@ class FilteringOptions(object):
         values = re.compile(values)
       items = getattr(namespace, self.dest, []) or []
       items.append((mod_type, match_type, values))
-      if (match_type, mod_type) == ('glob', 'filter'):
-        if not values.endswith(b'*'):
-          extension = b'*' if values.endswith(b'/') else b'/*'
-          items.append((mod_type, match_type, values+extension))
+      if (match_type, mod_type) == ('glob',
+                                    'filter') and not values.endswith(b'*'):
+        extension = b'*' if values.endswith(b'/') else b'/*'
+        items.append((mod_type, match_type, values+extension))
       setattr(namespace, self.dest, items)
 
   class HelperFilter(argparse.Action):
@@ -2029,20 +2024,19 @@ EXAMPLES
       raise SystemExit(_("Error: --analyze is incompatible with --stdin."))
     # If no path_changes are found, initialize with empty list but mark as
     # not inclusive so that all files match
-    if args.path_changes == None:
+    if args.path_changes is None:
       args.path_changes = []
       args.inclusive = False
     else:
       # Similarly, if we have no filtering paths, then no path should be
       # filtered out.  Based on how newname() works, the easiest way to
       # achieve that is setting args.inclusive to False.
-      if not any(x[0] == 'filter' for x in args.path_changes):
+      if all(x[0] != 'filter' for x in args.path_changes):
         args.inclusive = False
       # Also check for incompatible --use-base-name and --path-rename flags.
-      if args.use_base_name:
-        if any(x[0] == 'rename' for x in args.path_changes):
-          raise SystemExit(_("Error: --use-base-name and --path-rename are "
-                             "incompatible."))
+      if args.use_base_name and any(x[0] == 'rename' for x in args.path_changes):
+        raise SystemExit(_("Error: --use-base-name and --path-rename are "
+                           "incompatible."))
     # Also throw some sanity checks on git version here;
     # PERF: remove these checks once new enough git versions are common
     p = subproc.Popen('git fast-export -h'.split(),
@@ -2147,15 +2141,12 @@ EXAMPLES
           if repl:
             raise SystemExit(_("Error: In %s, 'glob:' and '==>' are incompatible (renaming globs makes no sense)" % decode(filename)))
         else:
-          if line.startswith(b'literal:'):
-            match = line[8:]
-          else:
-            match = line
-          if repl is not None:
-            if match and repl and match.endswith(b'/') != repl.endswith(b'/'):
-              raise SystemExit(_("Error: When rename directories, if OLDNAME "
-                                 "and NEW_NAME are both non-empty and either "
-                                 "ends with a slash then both must."))
+          match = line[8:] if line.startswith(b'literal:') else line
+          if (repl is not None and match and repl
+              and match.endswith(b'/') != repl.endswith(b'/')):
+            raise SystemExit(_("Error: When rename directories, if OLDNAME "
+                               "and NEW_NAME are both non-empty and either "
+                               "ends with a slash then both must."))
 
         # Record the filter or rename
         if repl is not None:
@@ -2282,15 +2273,12 @@ class RepoAnalyze(object):
       modes, shas, change_types, filenames = change
       if len(parents) == 1 and change_types.startswith(b'R'):
         change_types = b'R'  # remove the rename score; we don't care
-      if modes[-1] == b'160000':
-        continue
-      elif modes[-1] == b'000000':
-        # Track when files/directories are deleted
-        for f in RepoAnalyze.equiv_class(stats, filenames[-1]):
-          if any(x == b'040000' for x in modes[0:-1]):
-            stats['tree_deletions'][f] = date
-          else:
-            stats['file_deletions'][f] = date
+      if modes[-1] != b'160000':
+        raise SystemExit(_("Unhandled change type(s): %(change_type)s "
+                           "(in commit %(commit)s)")
+                         % ({'change_type': change_types, 'commit': commit})
+                         ) # pragma: no cover
+
       elif change_types.strip(b'AMT') == b'':
         RepoAnalyze.handle_file(stats, graph, commit, modes, shas, filenames)
       elif modes[-1] == b'040000' and change_types.strip(b'RAM') == b'':
@@ -2298,11 +2286,6 @@ class RepoAnalyze(object):
       elif change_types.strip(b'RAMT') == b'':
         RepoAnalyze.handle_file(stats, graph, commit, modes, shas, filenames)
         RepoAnalyze.handle_renames(stats, commit, change_types, filenames)
-      else:
-        raise SystemExit(_("Unhandled change type(s): %(change_type)s "
-                           "(in commit %(commit)s)")
-                         % ({'change_type': change_types, 'commit': commit})
-                         ) # pragma: no cover
 
   @staticmethod
   def gather_data(args):
@@ -2369,8 +2352,7 @@ class RepoAnalyze(object):
       # If someone is trying to analyze a subset of the history, make sure
       # to avoid dying on commits with parents that we haven't seen before
       if args.refs:
-        graph.record_external_commits([p for p in parents
-                                       if not p in graph.value])
+        graph.record_external_commits([p for p in parents if p not in graph.value])
 
       # Analyze this commit and update progress
       RepoAnalyze.analyze_commit(stats, graph, commit, parents, date,
@@ -2392,7 +2374,7 @@ class RepoAnalyze(object):
   @staticmethod
   def write_report(reportdir, stats):
     def datestr(datetimestr):
-      return datetimestr if datetimestr else _('<present>').encode()
+      return datetimestr or _('<present>').encode()
 
     def dirnames(path):
       while True:
@@ -3134,14 +3116,14 @@ class RepoFilter(object):
 
     if self._args.prune_empty == 'never':
       return False
-    always_prune = (self._args.prune_empty == 'always')
-
     # For merge commits, unless there are prunable (redundant) parents, we
     # do not want to prune
     if len(parents) >= 2 and not new_1st_parent:
       return False
 
     if len(parents) < 2:
+      always_prune = (self._args.prune_empty == 'always')
+
       # Special logic for commits that started empty...
       if not had_file_changes and not always_prune:
         had_parents_pruned = (len(parents) < len(orig_parents) or
@@ -3174,7 +3156,7 @@ class RepoFilter(object):
       # non-merge commits can only be empty if blob/file-change editing caused
       # all file changes in the commit to have the same file contents as
       # the parent.
-      changed_files = set(change.filename for change in commit.file_changes)
+      changed_files = {change.filename for change in commit.file_changes}
       if len(orig_parents) < 2 and changed_files - self._files_tweaked:
         return False
 
@@ -3225,7 +3207,6 @@ class RepoFilter(object):
     return True
 
   def _record_remapping(self, commit, orig_parents):
-    new_id = None
     # Record the mapping of old commit hash to new one
     if commit.original_id and self._import_pipes:
       fi_input, fi_output = self._import_pipes
@@ -3240,6 +3221,7 @@ class RepoFilter(object):
     # Also, record if this was a merge commit that turned into a non-merge
     # commit.
     if len(orig_parents) >= 2 and len(commit.parents) < 2:
+      new_id = None
       self._commits_no_longer_merges.append((commit.original_id, new_id))
 
   def callback_metadata(self, extra_items = dict()):
@@ -3255,8 +3237,7 @@ class RepoFilter(object):
     if blob.original_id in self._args.strip_blobs_with_ids:
       blob.skip()
 
-    if self._args.replace_text and \
-       not any(x == b"0" for x in blob.data[0:8192]):
+    if self._args.replace_text and b"0" not in blob.data[0:8192]:
       for literal, replacement in self._args.replace_text['literals']:
         blob.data = blob.data.replace(literal, replacement)
       for regex,   replacement in self._args.replace_text['regexes']:
@@ -3273,12 +3254,10 @@ class RepoFilter(object):
       if path_expression == b'':
         return True
       n = len(path_expression)
-      if (pathname.startswith(path_expression) and
+      return bool((pathname.startswith(path_expression) and
           (path_expression[n-1:n] == b'/' or
            len(pathname) == n or
-           pathname[n:n+1] == b'/')):
-        return True
-      return False
+           pathname[n:n+1] == b'/')))
 
     def newname(path_changes, pathname, use_base_name, filtering_is_inclusive):
       ''' Applies filtering and rename changes from path_changes to pathname,
@@ -3633,11 +3612,11 @@ class RepoFilter(object):
                                      b'fast-export.original')
         output = open(self._fe_orig, 'bw')
         self._input = InputFileBackup(self._input, output)
-        if self._args.debug:
-          tmp = [decode(x) if isinstance(x, bytes) else x for x in fep_cmd]
-          print("[DEBUG] Running: {}".format(' '.join(tmp)))
-          print("  (saving a copy of the output at {})"
-                .format(decode(self._fe_orig)))
+      if self._args.debug:
+        tmp = [decode(x) if isinstance(x, bytes) else x for x in fep_cmd]
+        print("[DEBUG] Running: {}".format(' '.join(tmp)))
+        print("  (saving a copy of the output at {})"
+              .format(decode(self._fe_orig)))
 
   def _setup_output(self):
     if not self._args.dry_run:
@@ -3667,8 +3646,8 @@ class RepoFilter(object):
             .format(decode(self._fe_filt)))
 
   def _migrate_origin_to_heads(self):
-    refs_to_migrate = set(x for x in self._orig_refs
-                          if x.startswith(b'refs/remotes/origin/'))
+    refs_to_migrate = {x for x in self._orig_refs
+                            if x.startswith(b'refs/remotes/origin/')}
     if not refs_to_migrate:
       return
     if self._args.debug:
